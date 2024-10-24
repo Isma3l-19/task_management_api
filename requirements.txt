@@ -1,1 +1,4 @@
-flask flasgger
+Flask
+Flask-SQLAlchemy
+Flasgger
+python-dotenv

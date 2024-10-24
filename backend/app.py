@@ -1,19 +1,34 @@
 # app.py
 from flask import Flask, jsonify, request, abort
 from flasgger import Swagger
+from models import db, Task
+from config import Config
+from math import ceil
 import uuid
 
+# Initialize the Flask app
 app = Flask(__name__)
+app.config.from_object(Config)
+
+# Initialize Swagger and SQLAlchemy
 swagger = Swagger(app)
+db.init_app(app)
+# Helper function to paginate the query
+def paginate(query, page, per_page):
+    total_items = query.count()
+    total_pages = ceil(total_items / per_page)
+    # Correct usage of paginate with the right number of parameters
+    items = query.paginate(page=page, per_page=per_page, error_out=False).items
+    return {
+        "total_items": total_items,
+        "total_pages": total_pages,
+        "current_page": page,
+        "per_page": per_page,
+        "items": [item.to_dict() for item in items]
+    }
 
-# In-memory task store (acts like a database for now)
-tasks = []
 
-# Helper function to find task by ID
-def find_task(task_id):
-    return next((task for task in tasks if task['id'] == task_id), None)
-
-# Swagger UI configuration
+# Route to create a task
 @app.route('/tasks', methods=['POST'])
 def create_task():
     """
@@ -45,71 +60,71 @@ def create_task():
     if not request.json or not 'title' in request.json:
         abort(400)
 
-    task = {
-        'id': str(uuid.uuid4()),
-        'title': request.json['title'],
-        'description': request.json.get('description', "")
-    }
-    tasks.append(task)
-    return jsonify(task), 201
+    task = Task(
+        id=str(uuid.uuid4()),
+        title=request.json['title'],
+        description=request.json.get('description', "")
+    )
+    db.session.add(task)
+    db.session.commit()
 
+    return jsonify(task.to_dict()), 201
+
+# app.py
 @app.route('/tasks', methods=['GET'])
 def get_tasks():
     """
-    Get the list of all tasks
-    ---
-    tags:
-      - Tasks
-    responses:
-      200:
-        description: A list of tasks
-        schema:
-          type: array
-          items:
-            type: object
-            properties:
-              id:
-                type: string
-              title:
-                type: string
-              description:
-                type: string
-    """
-    return jsonify(tasks)
-
-@app.route('/tasks/<task_id>', methods=['GET'])
-def get_task(task_id):
-    """
-    Get a specific task by ID
+    Get the list of all tasks with pagination
     ---
     tags:
       - Tasks
     parameters:
-      - name: task_id
-        in: path
-        type: string
-        required: true
-        description: The ID of the task to retrieve
+      - name: page
+        in: query
+        type: integer
+        description: Page number
+        required: false
+        default: 1
+      - name: per_page
+        in: query
+        type: integer
+        description: Number of items per page
+        required: false
+        default: 10
     responses:
       200:
-        description: A task object
+        description: Paginated list of tasks
         schema:
           type: object
           properties:
-            id:
-              type: string
-            title:
-              type: string
-            description:
-              type: string
-      404:
-        description: Task not found
+            total_items:
+              type: integer
+            total_pages:
+              type: integer
+            current_page:
+              type: integer
+            per_page:
+              type: integer
+            items:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  title:
+                    type: string
+                  description:
+                    type: string
     """
-    task = find_task(task_id)
-    if task is None:
-        abort(404)
-    return jsonify(task)
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
 
+    tasks_query = Task.query
+    return jsonify(paginate(tasks_query, page, per_page))
+
+
+# Route to update a task
 @app.route('/tasks/<task_id>', methods=['PUT'])
 def update_task(task_id):
     """
@@ -140,18 +155,20 @@ def update_task(task_id):
       400:
         description: Invalid input
     """
-    task = find_task(task_id)
+    task = Task.query.get(task_id)
     if task is None:
         abort(404)
 
     if not request.json:
         abort(400)
 
-    task['title'] = request.json.get('title', task['title'])
-    task['description'] = request.json.get('description', task['description'])
+    task.title = request.json.get('title', task.title)
+    task.description = request.json.get('description', task.description)
 
-    return jsonify(task)
+    db.session.commit()
+    return jsonify(task.to_dict())
 
+# Route to delete a task
 @app.route('/tasks/<task_id>', methods=['DELETE'])
 def delete_task(task_id):
     """
@@ -170,13 +187,16 @@ def delete_task(task_id):
       404:
         description: Task not found
     """
-    task = find_task(task_id)
+    task = Task.query.get(task_id)
     if task is None:
         abort(404)
 
-    tasks.remove(task)
+    db.session.delete(task)
+    db.session.commit()
     return '', 204
 
-# Run the Flask app
+# Initialize the database and run the app
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()  # Create tables if not exists
     app.run(debug=True)
